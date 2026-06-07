@@ -3,17 +3,24 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 
-HEADERS = {
+# 1. 사이트별 맞춤형 헤더 분리
+PC_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8'
+}
+
+MOBILE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
     'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8'
 }
 
 def scrape_saramin(keyword):
-    """사람인 채용공고 크롤링"""
+    """사람인 PC 버전 크롤링"""
     jobs = []
     url = f"https://www.saramin.co.kr/zf_user/search/recruit?searchword={keyword}"
     try:
-        res = requests.get(url, headers=HEADERS, timeout=5)
+        # 사람인은 철저하게 PC 헤더로 접근
+        res = requests.get(url, headers=PC_HEADERS, timeout=10)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             items = soup.select('div.item_recruit')
@@ -30,26 +37,26 @@ def scrape_saramin(keyword):
                         })
                 except Exception:
                     continue
+            print(f"  └ [사람인] '{keyword}' 결과: {len(jobs)}건 수집 완료")
     except Exception as e:
-        print(f"[-] 사람인 연결 실패 ({keyword})")
+        print(f"  └ [사람인] 연결 실패 또는 에러 발생 ({keyword})")
     return jobs
 
 def scrape_jobkorea_mobile(keyword):
-    """잡코리아 모바일 웹 채용공고 크롤링 (방화벽 우회 시도)"""
+    """잡코리아 모바일 버전 크롤링"""
     jobs = []
-    # PC 주소 대신 모바일(m.jobkorea.co.kr) 주소 사용
     url = f"https://m.jobkorea.co.kr/search?stext={keyword}"
     try:
-        # 방화벽 차단 시 오래 대기하지 않도록 타임아웃을 4초로 단축
-        res = requests.get(url, headers=HEADERS, timeout=4)
+        # 잡코리아는 모바일 헤더로 우회 접근
+        res = requests.get(url, headers=MOBILE_HEADERS, timeout=5)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            # 모바일 잡코리아의 검색 결과 리스트 태그 선택자
-            items = soup.select('ul.lists-item li') or soup.select('li.list-item')
+            # 모바일 검색결과 카드 컴포넌트 선택자 구체화
+            items = soup.select('ul.lists-item li') or soup.select('li.list-item') or soup.select('.list-default li')
             for item in items:
                 try:
-                    title_elem = item.select_one('p.title') or item.select_one('a.link')
-                    corp_elem = item.select_one('p.name') or item.select_one('span.corp-name')
+                    title_elem = item.select_one('p.title') or item.select_one('a.link') or item.select_one('.tit')
+                    corp_elem = item.select_one('p.name') or item.select_one('span.corp-name') or item.select_one('.corp')
                     if title_elem and corp_elem:
                         link_elem = item.select_one('a')
                         link = "https://m.jobkorea.co.kr" + link_elem['href'] if link_elem else url
@@ -61,10 +68,9 @@ def scrape_jobkorea_mobile(keyword):
                         })
                 except Exception:
                     continue
-    except requests.exceptions.Timeout:
-        print(f"[-] 잡코리아 방화벽 차단 가동 중 (타임아웃 - {keyword})")
-    except Exception as e:
-        print(f"[-] 잡코리아 기타 오류 ({keyword})")
+            print(f"  └ [잡코리아] '{keyword}' 결과: {len(jobs)}건 수집 완료")
+    except Exception:
+        print(f"  └ [잡코리아] 방화벽 차단 또는 타임아웃 ({keyword})")
     return jobs
 
 def main():
@@ -75,15 +81,18 @@ def main():
         print(f"--- 키워드 검색 중: {kw} ---")
         all_jobs.extend(scrape_saramin(kw))
         all_jobs.extend(scrape_jobkorea_mobile(kw))
-        time.sleep(1.0) # 차단 확률을 낮추기 위해 요청 간격 1초로 연장
+        time.sleep(1.0) # 안전을 위한 1초 대기
     
+    print("\n========================================")
     if all_jobs:
         df = pd.DataFrame(all_jobs)
+        # 중복 링크 제거
         df.drop_duplicates(subset=['링크'], inplace=True)
         df.to_csv("job_results.csv", index=False, encoding="utf-8-sig")
-        print(f"\n🎉 완료! 총 {len(df)}개의 공고를 수집하여 job_results.csv에 반영했습니다.")
+        print(f"🎉 최종 성공! 총 {len(df)}개의 고유 공고를 job_results.csv에 저장했습니다.")
     else:
-        print("\n😭 수집된 공고가 전혀 없습니다.")
+        print("😭 모든 사이트에서 공고를 가져오지 못했습니다. 위 로그를 확인해 주세요.")
+    print("========================================")
 
 if __name__ == "__main__":
     main()
