@@ -3,7 +3,7 @@ name: Automated Job Postings to Discord
 on:
   schedule:
     - cron: '0 0 * * *' # 매일 한국 시간 오전 9시 자동 실행
-  workflow_dispatch: # 수동 실행 가능
+  workflow_dispatch: # 수동 조작 가능
 
 jobs:
   scrape_and_notify:
@@ -18,29 +18,29 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: 필수 라이브러리 설치
+    - name: 필수 라이브러리 설치 (openpyxl 추가)
       run: |
         python -m pip install --upgrade pip
-        pip install requests beautifulsoup4 pandas
+        pip install requests beautifulsoup4 pandas openpyxl
 
     - name: 크롤러 실행
       run: python scraper.py
 
-    - name: 디스코드로 CSV 파일 전송
+    - name: 디스코드로 스타일링된 Excel 파일 전송
       env:
-        # 깃허브 시크릿에 저장한 디스코드 웹훅 주소를 불러옵니다.
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       run: |
-        if [ -f job_results.csv ]; then
-          echo "디스코드로 파일 전송 중..."
+        # csv 대신 xlsx 파일이 존재하는지 검증
+        if [ -f job_results.xlsx ]; then
+          echo "디스코드로 엑셀 파일 전송 중..."
           curl -X POST \
-            -F "file=@job_results.csv" \
-            -F "payload_json={\"content\": \"🚀 **오늘의 정보보안 채용공고 수집 결과가 도착했습니다!**\n수집된 채용공고 목록을 CSV 파일로 첨부합니다. 다운로드하여 확인하세요.\"}" \
+            -F "file=@job_results.xlsx" \
+            -F "payload_json={\"content\": \"🚀 **오늘의 정보보안 통합 채용공고 가독성 요약본이 도착했습니다!**\n노인 주간보호 등 무관 직무를 모두 필터링하고 디자인 폰트 처리를 완료한 완제품 Excel 파일을 첨부합니다.\"}" \
             $DISCORD_WEBHOOK_URL
         else
           echo "수집된 공고가 없어 알림만 전송합니다."
           curl -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"content\": \"😭 오늘 수집된 보안 분야 채용공고가 없습니다.\"}" \
+            -d "{\"content\": \"😭 오늘 수집 및 필터링된 보안 분야 채용공고가 없습니다.\"}" \
             $DISCORD_WEBHOOK_URL
         fi
