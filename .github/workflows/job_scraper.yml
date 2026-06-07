@@ -1,23 +1,19 @@
-name: Automated Job Postings Scraper
+name: Automated Job Postings to Discord
 
 on:
   schedule:
-    # 매일 한국 시간(KST) 오전 9시에 자동 실행 (UTC 00:00)
-    - cron: '0 0 * * *'
-  workflow_dispatch:
-    # 깃허브 웹 페이지에서 수동으로 실행하고 싶을 때 사용
+    - cron: '0 0 * * *' # 매일 한국 시간 오전 9시 자동 실행
+  workflow_dispatch: # 수동 실행 가능
 
 jobs:
-  scrape_and_commit:
+  scrape_and_notify:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # 파일 쓰기 권한 허용
 
     steps:
-    - name: 레포지토리 코드를 런너 환경으로 가져오기
+    - name: 레포지토리 체크아웃
       uses: actions/checkout@v4
 
-    - name: 파이썬(Python) 환경 설정
+    - name: 파이썬 환경 설정
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
@@ -30,14 +26,21 @@ jobs:
     - name: 크롤러 실행
       run: python scraper.py
 
-    - name: 변경된 CSV 데이터를 깃허브에 Commit & Push
+    - name: 디스코드로 CSV 파일 전송
+      env:
+        # 깃허브 시크릿에 저장한 디스코드 웹훅 주소를 불러옵니다.
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # 파일이 생성되었거나 변경되었을 때만 커밋 수행
         if [ -f job_results.csv ]; then
-          git add job_results.csv
-          git commit -m "Update job postings: $(date +'%Y-%m-%d %H:%M')" || exit 0
-          git push
+          echo "디스코드로 파일 전송 중..."
+          curl -X POST \
+            -F "file=@job_results.csv" \
+            -F "payload_json={\"content\": \"🚀 **오늘의 정보보안 채용공고 수집 결과가 도착했습니다!**\n수집된 채용공고 목록을 CSV 파일로 첨부합니다. 다운로드하여 확인하세요.\"}" \
+            $DISCORD_WEBHOOK_URL
+        else
+          echo "수집된 공고가 없어 알림만 전송합니다."
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"content\": \"😭 오늘 수집된 보안 분야 채용공고가 없습니다.\"}" \
+            $DISCORD_WEBHOOK_URL
         fi
