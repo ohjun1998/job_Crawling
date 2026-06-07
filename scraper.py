@@ -5,16 +5,13 @@ import time
 import urllib.parse
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+# 브라우저 기본 헤더 설정 (PC 버전으로 통합)
 PC_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8'
 }
 
-MOBILE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8'
-}
-
+# 무관한 직무를 걸러내기 위한 블랙리스트 키워드
 EXCLUDE_KEYWORDS = [
     "요양", "주간보호", "주야간보호", "보호소", "보호센터", "사회복지", "복지사", 
     "요양보호사", "간호", "물리치료", "작업치료", "치료사", "조리사", "영양사", 
@@ -22,12 +19,14 @@ EXCLUDE_KEYWORDS = [
 ]
 
 def should_exclude(title, corp):
+    """제외 키워드 포함 여부 검사"""
     for kw in EXCLUDE_KEYWORDS:
         if kw in title or kw in corp:
             return True
     return False
 
 def scrape_saramin(keyword):
+    """1. 사람인 채용공고 크롤링"""
     jobs = []
     url = f"https://www.saramin.co.kr/zf_user/search/recruit?searchword={keyword}"
     try:
@@ -48,51 +47,63 @@ def scrape_saramin(keyword):
     except Exception: print(f"  └ [사람인] 연결 실패 ({keyword})")
     return jobs
 
-def scrape_jobkorea_mobile(keyword):
-    """잡코리아 모바일 크롤링 (상태 추적 로그 추가 및 태그 확장)"""
+def scrape_jobkorea(keyword):
+    """2. 잡코리아 최신 개편 레이아웃 대응 크롤링"""
     jobs = []
-    url = f"https://m.jobkorea.co.kr/search?stext={keyword}"
+    url = f"https://www.jobkorea.co.kr/Search/?stext={keyword}"
     try:
-        res = requests.get(url, headers=MOBILE_HEADERS, timeout=6)
-        
-        # 1. 디버깅을 위한 상태 코드 출력
-        print(f"  └ [잡코리아] '{keyword}' 접속 시도 -> HTTP 상태코드: {res.status_code}")
+        res = requests.get(url, headers=PC_HEADERS, timeout=8)
+        print(f"  └ [잡코리아] '{keyword}' 접속 -> HTTP 상태코드: {res.status_code}")
         
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # 변화 가능성을 감안해 검색 결과 리스트 태그 후보군 전수 조사
-            items = (
-                soup.select('ul.lists-item li') or 
-                soup.select('li.list-item') or 
-                soup.select('.list-default li') or 
-                soup.select('div.list-item')
-            )
+            # 보내주신 HTML의 핵심 앵커인 data-sentry-component="Title" 속성 추적
+            title_elements = soup.select('a[data-sentry-component="Title"]')
+            print(f"  └ [잡코리아] 발견된 신규 레이아웃 공고 수: {len(title_elements)}개")
             
-            # 2. 디버깅을 위한 파싱 아이템 개수 출력
-            print(f"  └ [잡코리아] 발견된 원본 공고 태그 수: {len(items)}개")
-            
-            for item in items:
-                try:
-                    title_elem = item.select_one('p.title') or item.select_one('a.link') or item.select_one('.tit') or item.select_one('.title')
-                    corp_elem = item.select_one('p.name') or item.select_one('span.corp-name') or item.select_one('.corp') or item.select_one('.name')
-                    
-                    if title_elem and corp_elem:
-                        title, corp = title_elem.get_text(strip=True), corp_elem.get_text(strip=True)
-                        if should_exclude(title, corp): continue
+            # 시나리오 A: 신규 레이아웃 요소가 발견된 경우 (정상 파싱)
+            if len(title_elements) > 0:
+                for title_elem in title_elements:
+                    try:
+                        title = title_elem.get_text(strip=True)
+                        link = title_elem['href']
+                        if not link.startswith('http'):
+                            link = "https://www.jobkorea.co.kr" + link
                         
-                        link_elem = item.select_one('a')
-                        link = "https://m.jobkorea.co.kr" + link_elem['href'] if (link_elem and 'href' in link_elem.attrs) else url
+                        # 상위 카드 컴포넌트(w-full)로 이동하여 내부의 회사명 클래스(text-typo-b2-16) 추출
+                        parent_card = title_elem.find_parent('div', class_='w-full') or title_elem.find_parent('div')
+                        corp_elem = parent_card.select_one('span.text-typo-b2-16') if parent_card else None
+                        corp = corp_elem.get_text(strip=True) if corp_elem else "회사명 확인불가"
+                        
+                        if should_exclude(title, corp): continue
                         jobs.append({"사이트": "잡코리아", "회사명": corp, "제목": title, "링크": link})
-                except Exception: continue
-            print(f"  └ [잡코리아] 필터링 후 최종 {len(jobs)}건 수집 완료")
+                    except Exception: continue
+            
+            # 시나리오 B: 만약 신규 레이아웃이 안 잡힐 경우를 대비한 구형 백업 선택자 가동
+            else:
+                backup_items = soup.select('li.list-post') or soup.select('tr.dev_item')
+                for item in backup_items:
+                    try:
+                        title_elem = item.select_one('div.post-list-info a.title') or item.select_one('.tit a')
+                        corp_elem = item.select_one('div.post-list-corp a') or item.select_one('.corp a')
+                        if title_elem and corp_elem:
+                            title, corp = title_elem.get_text(strip=True), corp_elem.get_text(strip=True)
+                            if should_exclude(title, corp): continue
+                            link = title_elem['href']
+                            if not link.startswith('http'): link = "https://www.jobkorea.co.kr" + link
+                            jobs.append({"사이트": "잡코리아", "회사명": corp, "제목": title, "링크": link})
+                    except Exception: continue
+                    
+            print(f"  └ [잡코리아] 최종 필터링 후 {len(jobs)}건 저장 대기")
         else:
-            print(f"  └ [잡코리아] 방화벽이 접근을 거부했습니다. (200 OK가 아님)")
+            print(f"  └ [잡코리아] 방화벽 거부 (Status: {res.status_code}) -> 로컬 실행 권장")
     except Exception as e: 
-        print(f"  └ [잡코리아] 타임아웃 또는 연결 거부 발생")
+        print(f"  └ [잡코리아] 타임아웃 또는 예외 발생: {e}")
     return jobs
 
 def scrape_incruit(keyword):
+    """3. 인크루트 채용공고 크롤링"""
     jobs = []
     url = f"https://search.incruit.com/list/search.asp?col=job&kw={keyword}"
     try:
@@ -114,6 +125,7 @@ def scrape_incruit(keyword):
     return jobs
 
 def scrape_remember(keyword):
+    """4. 리멤버 채용공고 크롤링"""
     jobs = []
     url = f"https://career.rememberapp.com/job/search?keyword={keyword}"
     try:
@@ -136,6 +148,7 @@ def scrape_remember(keyword):
     return jobs
 
 def scrape_google(keyword):
+    """5. 구글 검색결과 크롤링"""
     jobs = []
     query = urllib.parse.quote(f"{keyword} 채용공고")
     url = f"https://www.google.com/search?q={query}"
@@ -151,7 +164,7 @@ def scrape_google(keyword):
                     if title_elem and link_elem:
                         title = title_elem.get_text(strip=True)
                         if should_exclude(title, ""): continue
-                        jobs.append({"사이트": "구글검색", "회사명": "검색결과참조", "제목": title, "링크": link_elem['href']})
+                        jobs.append({"사이트": "구글검색", "회사명": "검색결과참조", "제목": title, "リンク": link_elem['href']})
                 except Exception: continue
             print(f"  └ [구글검색] '{keyword}' -> 필터링 후 {len(jobs)}건 수집 완료")
     except Exception: pass
@@ -164,7 +177,7 @@ def main():
     for kw in keywords:
         print(f"--- 통합 검색 진행 중: {kw} ---")
         all_jobs.extend(scrape_saramin(kw))
-        all_jobs.extend(scrape_jobkorea_mobile(kw))
+        all_jobs.extend(scrape_jobkorea(kw))
         all_jobs.extend(scrape_incruit(kw))
         all_jobs.extend(scrape_remember(kw))
         all_jobs.extend(scrape_google(kw))
@@ -173,7 +186,7 @@ def main():
     print("\n==================================================")
     if all_jobs:
         df = pd.DataFrame(all_jobs)
-        df.drop_duplicates(subset=['링크'], inplace=True)
+        df.drop_duplicates(subset=['링크' if '링크' in df.columns else '링크'], inplace=True)
         
         output_filename = "job_results.xlsx"
         with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
